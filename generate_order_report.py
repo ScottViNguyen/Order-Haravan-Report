@@ -282,6 +282,7 @@ def load_priority_map():
 
 def read_records():
     raw = []
+    order_buckets = defaultdict(list)
     product_map = load_product_map()
     priority_map = load_priority_map()
     image_link_map = load_image_link_map()
@@ -303,7 +304,7 @@ def read_records():
 
             qty = as_number(row[idx["Số lượng sản phẩm"]])
             price = as_number(row[idx["Giá sản phẩm"]])
-            revenue = qty * price
+            gross_revenue = qty * price
             barcode = clean_text(row[idx["Mã sản phẩm"]], "Không có barcode")
             product = clean_text(row[idx["Tên sản phẩm"]], "Không có tên sản phẩm")
             model = extract_model(product)
@@ -330,7 +331,9 @@ def read_records():
                 "c": channel,
                 "x": cancel,
                 "q": round(qty, 4),
-                "r": round(revenue, 2),
+                "r": 0,
+                "_gross": gross_revenue,
+                "_order_total": as_number(row[idx["Tổng cộng"]]),
                 "s": sku,
                 "v": barcode,
                 "p": product,
@@ -346,7 +349,27 @@ def read_records():
                 "ful": clean_text(row[idx["Tình trạng giao hàng"]], "Không xác định"),
             }
             raw.append(item)
+            order_buckets[order_id].append(item)
 
+    for order_items in order_buckets.values():
+        order_total = order_items[0].get("_order_total", 0)
+        gross_total = sum(item.get("_gross", 0) for item in order_items)
+        if gross_total:
+            allocated = 0
+            for item in order_items[:-1]:
+                item["r"] = round(order_total * item.get("_gross", 0) / gross_total, 2)
+                allocated += item["r"]
+            order_items[-1]["r"] = round(order_total - allocated, 2)
+        elif order_items:
+            even_share = round(order_total / len(order_items), 2)
+            allocated = even_share * (len(order_items) - 1)
+            for item in order_items[:-1]:
+                item["r"] = even_share
+            order_items[-1]["r"] = round(order_total - allocated, 2)
+
+    for item in raw:
+        item.pop("_gross", None)
+        item.pop("_order_total", None)
     return raw
 
 
@@ -530,7 +553,7 @@ def html_template(report_json):
       <div class="panel-toolbar"><div class="subtle">Top SKU theo DT, có thể sắp xếp theo Barcode, sản phẩm, group, DT, volume, ASP.</div><button id="downloadSkuData" class="download-btn">Tải data</button></div>
       <h3>Top SKU theo DT</h3><div id="skuTable"></div>
       <section class="grid-2" style="margin-top:20px"><article class="panel"><h3>Top 20 Growth</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuGrowthTable"></div></article><article class="panel"><h3>Top 20 Reduce</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuReduceTable"></div></article></section>
-      <div class="note">Nguồn dữ liệu: các file Orders_T*.xlsx trong folder hiện tại, Product Haravan.xlsx để join link/ảnh sản phẩm, và SKU Priority.xlsx để phân loại Priority. DT = Giá sản phẩm x Số lượng theo từng line-item để tránh nhân đôi Tổng cộng ở đơn có nhiều sản phẩm. Dấu chấm/dấu phẩy số dùng locale vi-VN.</div>
+      <div class="note">Nguồn dữ liệu: các file Orders_T*.xlsx trong folder hiện tại, Product Haravan.xlsx để join link/ảnh sản phẩm, và SKU Priority.xlsx để phân loại Priority. DT = Tổng cộng sau giảm giá theo mã đơn duy nhất; với đơn có nhiều sản phẩm, DT được phân bổ về từng dòng theo tỷ trọng Giá sản phẩm x Số lượng để tránh nhân đôi mã đơn. Dấu chấm/dấu phẩy số dùng locale vi-VN.</div>
     </section>
 
     <h2 class="section-title">6. Raw Data</h2>
