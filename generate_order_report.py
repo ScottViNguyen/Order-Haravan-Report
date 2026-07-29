@@ -1,7 +1,5 @@
 import json
 import re
-import base64
-import mimetypes
 from html import unescape
 from collections import defaultdict
 from datetime import datetime
@@ -399,21 +397,6 @@ def build_report_data(records):
             "imageAssets": {},
         },
     }
-
-
-def build_image_assets():
-    assets = {}
-    if not LOCAL_IMAGE_DIR.exists():
-        return assets
-    for path in sorted(LOCAL_IMAGE_DIR.iterdir()):
-        if not path.is_file():
-            continue
-        sku = path.stem
-        mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-        data = base64.b64encode(path.read_bytes()).decode("ascii")
-        assets[sku] = f"data:{mime};base64,{data}"
-    return assets
-
 
 def html_template(report_json):
     return """<!doctype html>
