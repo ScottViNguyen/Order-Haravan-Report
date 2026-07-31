@@ -521,6 +521,7 @@ def html_template(report_json):
     .delta.up { color: var(--green); } .delta.down { color: var(--red); } .delta.flat { color: var(--muted); }
     .breakdown-grid { display: grid; grid-template-columns: minmax(250px,.8fr) minmax(0,1.7fr); gap: 16px; margin-bottom: 18px; }
     .grid-2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 18px; }
+    .stacked-panels { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 20px 0 18px; }
     .panel { padding: 16px; overflow: hidden; }
     .panel h3 { margin: 0 0 14px; font-size: 20px; }
     .panel-head, .panel-toolbar, .raw-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -647,7 +648,7 @@ def html_template(report_json):
     <section class="panel">
       <div class="panel-toolbar"><div class="subtle">Top SKU theo DT, có thể sắp xếp theo Barcode, sản phẩm, group, DT, volume, ASP.</div><button id="downloadSkuData" class="download-btn">Tải data</button></div>
       <h3>Top SKU theo DT</h3><div id="skuTable"></div>
-      <section class="grid-2" style="margin-top:20px"><article class="panel"><h3>Top 20 Growth</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuGrowthTable"></div></article><article class="panel"><h3>Top 20 Reduce</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuReduceTable"></div></article></section>
+      <section class="stacked-panels"><article class="panel"><h3>Top 20 Growth</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuGrowthTable"></div></article><article class="panel"><h3>Top 20 Reduce</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuReduceTable"></div></article></section>
       <div class="note">Nguồn dữ liệu: các file Orders_T*.xlsx trong folder hiện tại, Product Haravan.xlsx để join link/ảnh sản phẩm, và SKU Priority.xlsx để phân loại Priority. DT = Tổng cộng sau giảm giá theo mã đơn duy nhất; với đơn có nhiều sản phẩm, DT được phân bổ về từng dòng theo tỷ trọng Giá sản phẩm x Số lượng để tránh nhân đôi mã đơn. Dấu chấm/dấu phẩy số dùng locale vi-VN.</div>
     </section>
 
