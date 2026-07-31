@@ -1,3 +1,5 @@
 Orders_T*.xlsx
 product_image_cache.json
+% Contribution.xlsx
+__pycache__/
 .DS_Store

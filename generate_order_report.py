@@ -16,10 +16,12 @@ PRODUCT_FILE = Path("/Users/nguyenhungvi/Downloads/Product Haravan.xlsx")
 PRIORITY_FILE = Path("/Users/nguyenhungvi/Downloads/SKU Priority.xlsx")
 IMAGE_LINK_FILE = Path("/Users/nguyenhungvi/Downloads/link hình ảnh.xlsx")
 IMAGE_LINK_UPDATE_FILE = Path("/Users/nguyenhungvi/Downloads/ link ảnh update.xlsx")
+CONTRIBUTION_FILE = BASE / "% Contribution.xlsx"
 IMAGE_CACHE = BASE / "product_image_cache.json"
 LOCAL_IMAGE_DIR = BASE / "product_images"
 FETCH_PRODUCT_IMAGES = False
 DOWNLOAD_IMAGE_FILES = True
+SOURCE_TYPES = ("Product Cart", "Livestream", "Video", "Affiliate")
 
 
 def as_number(value):
@@ -51,6 +53,20 @@ def month_key(filename):
     if not match:
         return (9999, 99)
     return (int(match.group(2)), int(match.group(1)))
+
+
+def month_value(value):
+    if value in (None, ""):
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()[:7]
+    date = as_date(value)
+    if date:
+        return date[:7]
+    match = re.search(r"(\d{4})[-/](\d{1,2})", str(value))
+    if match:
+        return f"{int(match.group(1)):04d}-{int(match.group(2)):02d}"
+    return ""
 
 
 def clean_text(value, fallback="Chưa phân loại"):
@@ -223,6 +239,59 @@ def load_image_link_map():
     return image_map
 
 
+def normalize_contribution_channel(value):
+    text = clean_text(value, "").lower().replace(" ", "")
+    if text in {"tiktok", "tiktokshop", "tik_tok"}:
+        return "tiktokshop"
+    if text == "shopee":
+        return "shopee"
+    return text
+
+
+def first_existing(mapping, *keys):
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
+def load_source_contribution_map():
+    contribution = {}
+    if not CONTRIBUTION_FILE.exists():
+        return contribution
+
+    wb = load_workbook(CONTRIBUTION_FILE, read_only=True, data_only=True)
+    ws = wb.active
+    headers = [clean_text(cell.value, "") for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    normalized = {re.sub(r"\s+", "", header).lower(): pos for pos, header in enumerate(headers)}
+    channel_col = first_existing(normalized, "kênh", "kenh", "channel")
+    month_col = first_existing(normalized, "month", "tháng", "thang")
+    source_cols = {
+        "Product Cart": normalized.get("%productcart"),
+        "Livestream": first_existing(normalized, "%livestream", "%live"),
+        "Video": normalized.get("%video"),
+        "Affiliate": first_existing(normalized, "%affiliate", "%tiếpthịliênkết", "%tiepthilienket"),
+    }
+    if channel_col is None or month_col is None or any(pos is None for pos in source_cols.values()):
+        return contribution
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        channel = normalize_contribution_channel(row[channel_col] if channel_col < len(row) else "")
+        month = month_value(row[month_col] if month_col < len(row) else "")
+        if channel not in {"shopee", "tiktokshop"} or not month:
+            continue
+        shares = {}
+        for source, col in source_cols.items():
+            share = as_number(row[col] if col < len(row) else 0)
+            if share > 1:
+                share = share / 100
+            shares[source] = max(0, share)
+        total_share = sum(shares.values())
+        if total_share:
+            contribution[f"{channel}|{month}"] = {source: value / total_share for source, value in shares.items()}
+    return contribution
+
+
 def build_model_index(mapping):
     model_index = {}
     for sku, info in mapping.items():
@@ -380,6 +449,7 @@ def build_report_data(records):
     classifies = sorted({item["cl"] for item in records})
     default_to = dates[-1]
     default_from = default_to[:8] + "01"
+    source_contribution = load_source_contribution_map()
     return {
         "records": records,
         "meta": {
@@ -394,6 +464,8 @@ def build_report_data(records):
             "skus": skus,
             "keySummers": priorities,
             "classifies": classifies,
+            "sourceTypes": SOURCE_TYPES,
+            "sourceContribution": source_contribution,
             "imageAssets": {},
         },
     }
@@ -455,6 +527,21 @@ def html_template(report_json):
     .view-switch { display: inline-flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
     .view-switch button { border: 1px solid #d7e4ef; background: #eef7f5; color: #527b75; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 800; cursor: pointer; }
     .view-switch button.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .source-section { margin-bottom: 18px; }
+    .source-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
+    .source-title { margin: 0 0 10px; font-size: 22px; font-weight: 800; }
+    .source-subtitle { color: var(--muted); font-size: 14px; font-weight: 700; }
+    .source-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+    .source-tabs button { border: 1px solid #d7e4ef; background: #eef7f5; color: #527b75; border-radius: 10px; padding: 10px 16px; font-size: 14px; font-weight: 800; cursor: pointer; }
+    .source-tabs button.active { background: var(--blue); border-color: var(--blue); color: #fff; box-shadow: 0 4px 10px rgba(77,137,232,.24); }
+    .source-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 12px; }
+    .source-card { border: 1px solid #dbe7f4; border-radius: 14px; padding: 18px; background: #fff; min-height: 156px; }
+    .source-card h3 { margin: 0; font-size: 20px; }
+    .source-card .source-value { margin-top: 14px; font-size: 34px; line-height: 1; font-weight: 800; }
+    .source-card .source-share { margin-top: 10px; color: var(--muted); font-size: 13px; font-weight: 700; }
+    .source-channel { display: grid; grid-template-columns: 1fr auto; gap: 12px; margin-top: 10px; font-size: 14px; font-weight: 800; }
+    .source-channel span:last-child { color: var(--muted); }
+    .source-chart { min-height: 300px; }
     .viz-list { display: grid; gap: 12px; }
     .viz-row { display: grid; grid-template-columns: minmax(120px,1.2fr) 3fr auto; gap: 12px; align-items: center; }
     .viz-name { font-size: 14px; font-weight: 700; line-height: 1.2; }
@@ -487,7 +574,7 @@ def html_template(report_json):
     .summary-stat-label { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
     .summary-stat-value { margin-top: 4px; font-size: 20px; font-weight: 800; line-height: 1.05; }
     @media (max-width: 1200px) { .filters, .metrics, .breakdown-grid, .grid-2 { grid-template-columns: 1fr 1fr; } }
-    @media (max-width: 760px) { .filters, .metrics, .breakdown-grid, .grid-2, .summary-total-grid { grid-template-columns: 1fr; } .hero h1 { font-size: 24px; } .metric .value { font-size: 28px; } }
+    @media (max-width: 760px) { .filters, .metrics, .breakdown-grid, .grid-2, .summary-total-grid, .source-cards { grid-template-columns: 1fr; } .source-head { flex-direction: column; } .hero h1 { font-size: 24px; } .metric .value, .source-card .source-value { font-size: 28px; } }
   </style>
 </head>
 <body>
@@ -506,6 +593,20 @@ def html_template(report_json):
       <div class="filter-card"><label>Classify</label><div class="multi-select" id="classifyFilter"><button type="button" class="multi-select-trigger" id="classifyTrigger"></button><div class="multi-select-menu"><input class="multi-select-search" id="classifySearch" placeholder="Tìm classify..." /><div class="multi-select-actions"><button type="button" data-filter="classify" data-action="all">Chọn tất cả</button><button type="button" data-filter="classify" data-action="clear">Bỏ chọn</button></div><div class="multi-select-options" id="classifyOptions"></div></div></div><div class="selected-chips" id="classifyChips"></div></div>
       <div class="filter-card"><label for="cancelFilter">Trạng thái hủy</label><select id="cancelFilter"><option value="all">Tất cả</option><option value="No">No</option><option value="Yes">Yes</option></select></div>
       <div class="filter-card"><label for="rawPeriodFilter">Raw date scope</label><select id="rawPeriodFilter"><option value="week">Tuần</option><option value="month">Tháng</option><option value="year">Năm</option><option value="day">Ngày</option></select></div>
+    </section>
+
+    <section class="panel source-section">
+      <div class="source-head">
+        <div>
+          <h2 class="source-title">Source of Growth</h2>
+          <div class="source-subtitle">Phân bổ DT Shopee và TikTok theo tỷ trọng trong file % Contribution; DT gốc vẫn lấy từ Orders_T*.xlsx</div>
+        </div>
+        <div class="view-switch" id="sourceViewSwitch"><button type="button" data-source-view="day" class="active">Ngày</button><button type="button" data-source-view="week">Tuần</button><button type="button" data-source-view="month">Tháng</button></div>
+      </div>
+      <div class="source-tabs" id="sourceTabs"><button type="button" data-source-filter="all" class="active">Tất cả</button><button type="button" data-source-filter="Product Cart">Product Cart</button><button type="button" data-source-filter="Livestream">Live</button><button type="button" data-source-filter="Video">Video</button><button type="button" data-source-filter="Affiliate">Aff</button></div>
+      <div class="source-cards" id="sourceCards"></div>
+      <div class="chart-shell source-chart" id="sourceGrowthChart"></div>
+      <div class="legend" id="sourceLegend"></div>
     </section>
 
     <h2 class="section-title">1. Total DT / Volume</h2>
@@ -545,7 +646,9 @@ def html_template(report_json):
   <script>
     const REPORT_DATA = __REPORT_JSON__;
     const PALETTE = ["#4d89e8","#f39a3f","#9d73db","#a9bf52","#2aa6b8","#de72aa","#dcb774","#59b0db","#f0c635","#7d8940","#a67a63","#9aa9c9"];
-    const state = { from: REPORT_DATA.meta.defaultFrom, to: REPORT_DATA.meta.defaultTo, channel: [], group: [], sku: [], keySummer: [], classify: [], cancel: "all", rawPeriod: "week", trendView: "day", summarySort: { channel: {key:"revenue",dir:"desc"}, group: {key:"revenue",dir:"desc"}, keySummer: {key:"revenue",dir:"desc"}, classify: {key:"revenue",dir:"desc"} }, skuSort: {key:"revenue",dir:"desc"} };
+    const SOURCE_TYPES = REPORT_DATA.meta.sourceTypes || ["Product Cart","Livestream","Video","Affiliate"];
+    const SOURCE_COLORS = {"Product Cart":"#f39a3f","Livestream":"#111111","Video":"#4d89e8","Affiliate":"#59bea7"};
+    const state = { from: REPORT_DATA.meta.defaultFrom, to: REPORT_DATA.meta.defaultTo, channel: [], group: [], sku: [], keySummer: [], classify: [], cancel: "all", rawPeriod: "week", trendView: "day", sourceView: "day", sourceFilter: "all", summarySort: { channel: {key:"revenue",dir:"desc"}, group: {key:"revenue",dir:"desc"}, keySummer: {key:"revenue",dir:"desc"}, classify: {key:"revenue",dir:"desc"} }, skuSort: {key:"revenue",dir:"desc"} };
     const multiSelectConfig = {
       channel: { values: REPORT_DATA.meta.channels, label: "kênh", allLabel: "Tất cả kênh" },
       group: { values: REPORT_DATA.meta.groups, label: "group", allLabel: "Tất cả group" },
@@ -562,6 +665,8 @@ def html_template(report_json):
       document.getElementById("cancelFilter").addEventListener("change", e => { state.cancel = e.target.value; render(); });
       document.getElementById("rawPeriodFilter").addEventListener("change", e => { state.rawPeriod = e.target.value; render(); });
       document.querySelectorAll("[data-trend-view]").forEach(btn => btn.addEventListener("click", () => { state.trendView = btn.dataset.trendView; document.querySelectorAll("[data-trend-view]").forEach(b => b.classList.toggle("active", b === btn)); render(); }));
+      document.querySelectorAll("[data-source-view]").forEach(btn => btn.addEventListener("click", () => { state.sourceView = btn.dataset.sourceView; document.querySelectorAll("[data-source-view]").forEach(b => b.classList.toggle("active", b === btn)); render(); }));
+      document.querySelectorAll("[data-source-filter]").forEach(btn => btn.addEventListener("click", () => { state.sourceFilter = btn.dataset.sourceFilter; document.querySelectorAll("[data-source-filter]").forEach(b => b.classList.toggle("active", b === btn)); render(); }));
       document.getElementById("downloadSkuData").addEventListener("click", downloadSkuData);
       document.getElementById("downloadGroupData").addEventListener("click", downloadGroupData);
       document.getElementById("downloadRawData").addEventListener("click", downloadRawData);
@@ -616,7 +721,14 @@ def html_template(report_json):
     function getDateParts(isoDate) { const dt = new Date(isoDate + "T00:00:00"); const year = dt.getFullYear(), month = dt.getMonth() + 1; const tmp = new Date(dt); const weekday = tmp.getDay() || 7; tmp.setDate(tmp.getDate() + 4 - weekday); const weekYear = tmp.getFullYear(); const yearStart = new Date(weekYear, 0, 1); const week = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7); return { year, month, week, weekYear }; }
     function trendPeriodInfo(iso) { const p = getDateParts(iso); if (state.trendView === "month") return { key: `${p.year}-${String(p.month).padStart(2,"0")}`, label: `${p.year}-${String(p.month).padStart(2,"0")}` }; if (state.trendView === "week") return { key: `${p.weekYear}-W${String(p.week).padStart(2,"0")}`, label: `${p.weekYear} W${p.week}` }; return { key: iso, label: iso.slice(8,10) + "/" + iso.slice(5,7) }; }
     function aggregateTrendRecords(records) { const map = new Map(); for (const item of records) { const period = trendPeriodInfo(item.d); const row = map.get(period.key) || { key: period.key, label: period.label, revenue: 0, volume: 0 }; row.revenue += item.r; row.volume += item.q; map.set(period.key, row); } return Array.from(map.values()).sort((a,b) => a.key.localeCompare(b.key)); }
-    function render() { const current = filterRecords(REPORT_DATA.records, state.from, state.to); const previousFrom = shiftMonthClamped(state.from, -1), previousTo = shiftMonthClamped(state.to, -1); const previous = filterRecords(REPORT_DATA.records, previousFrom, previousTo); document.getElementById("comparisonNote").innerHTML = `<strong>Kỳ đang xem:</strong> ${periodLabel(state.from, state.to)} &nbsp;•&nbsp; <strong>So sánh cùng ngày tháng trước:</strong> ${periodLabel(previousFrom, previousTo)}`; const s = summarize(current), p = summarize(previous); setMetric("metricRevenue","metricRevenueDelta",s.revenue,p.revenue,formatCurrency,false,previousFrom,previousTo); setMetric("metricVolume","metricVolumeDelta",s.volume,p.volume,formatUnits,false,previousFrom,previousTo); setMetric("metricAsp","metricAspDelta",s.asp,p.asp,formatCurrency,false,previousFrom,previousTo); setMetric("metricCancel","metricCancelDelta",s.cancelRate,p.cancelRate,formatPercent,true,previousFrom,previousTo); renderTrendChart(current); renderBreakdown("channel","c",current,previous); renderBreakdown("group","g",current,previous); renderBreakdown("keySummer","ks",current,previous); renderBreakdown("classify","cl",current,previous); renderSkuTable(current, previous); renderRawTable(current); }
+    function sourcePeriodInfo(iso) { const p = getDateParts(iso); if (state.sourceView === "month") return { key: `${p.year}-${String(p.month).padStart(2,"0")}`, label: `${p.month}/${String(p.year).slice(2)}` }; if (state.sourceView === "week") return { key: `${p.weekYear}-W${String(p.week).padStart(2,"0")}`, label: `W${p.week}` }; return { key: iso, label: `${Number(iso.slice(8,10))} thg ${Number(iso.slice(5,7))}` }; }
+    function contributionShares(channel, month) { const direct = REPORT_DATA.meta.sourceContribution?.[`${channel}|${month}`]; if (direct) return direct; return Object.fromEntries(SOURCE_TYPES.map(name => [name, name === "Product Cart" ? 1 : 0])); }
+    function allocatedSourceRows(records) { const rows = []; for (const item of records) { if (!["shopee","tiktokshop"].includes(item.c)) continue; const shares = contributionShares(item.c, item.m); for (const source of SOURCE_TYPES) { const revenue = item.r * Number(shares[source] || 0); if (revenue) rows.push({ date: item.d, month: item.m, channel: item.c, source, revenue }); } } return rows; }
+    function aggregateSourceCards(records) { const rows = new Map(SOURCE_TYPES.map(name => [name, { name, revenue: 0, shopee: 0, tiktokshop: 0 }])); for (const item of allocatedSourceRows(records)) { const row = rows.get(item.source); row.revenue += item.revenue; row[item.channel] += item.revenue; } return Array.from(rows.values()); }
+    function aggregateSourceTrend(records) { const map = new Map(); for (const item of allocatedSourceRows(records)) { if (state.sourceFilter !== "all" && item.source !== state.sourceFilter) continue; const period = sourcePeriodInfo(item.date); const row = map.get(period.key) || { key: period.key, label: period.label, total: 0, values: Object.fromEntries(SOURCE_TYPES.map(name => [name, 0])) }; row.values[item.source] += item.revenue; row.total += item.revenue; map.set(period.key, row); } return Array.from(map.values()).sort((a,b) => a.key.localeCompare(b.key)); }
+    function renderSourceGrowth(records) { const cards = aggregateSourceCards(records), total = cards.reduce((sum,row) => sum + row.revenue, 0); const visibleCards = state.sourceFilter === "all" ? cards : cards.filter(row => row.name === state.sourceFilter); document.getElementById("sourceCards").innerHTML = visibleCards.map(row => `<article class="source-card"><h3>${escapeHtml(row.name)}</h3><div class="source-value">${formatCurrency(row.revenue)}</div><div class="source-share">${formatPercent(total ? row.revenue / total * 100 : 0)} tổng source growth</div><div class="source-channel"><span>Shopee</span><span>${formatCurrency(row.shopee)}</span></div><div class="source-channel"><span>TikTok</span><span>${formatCurrency(row.tiktokshop)}</span></div></article>`).join("") || `<div class="empty">Không có dữ liệu.</div>`; renderSourceGrowthChart(records); document.getElementById("sourceLegend").innerHTML = SOURCE_TYPES.filter(name => state.sourceFilter === "all" || state.sourceFilter === name).map(name => `<span><i style="background:${SOURCE_COLORS[name]}"></i> ${escapeHtml(name)}</span>`).join(""); }
+    function renderSourceGrowthChart(records) { const rows = aggregateSourceTrend(records); if (!rows.length) { document.getElementById("sourceGrowthChart").innerHTML = `<div class="empty">Không có dữ liệu.</div>`; return; } const visible = SOURCE_TYPES.filter(name => state.sourceFilter === "all" || state.sourceFilter === name); const width = Math.max(980, rows.length * 44), height = 330, pad = {top:22,right:28,bottom:62,left:44}; const chartW = width - pad.left - pad.right, chartH = height - pad.top - pad.bottom, maxTotal = Math.max(...rows.map(row => row.total), 1); const step = chartW / rows.length, barW = Math.max(12, Math.min(34, step * .58)); let grid = "", bars = "", labels = ""; for (let i = 0; i <= 4; i++) { const y = pad.top + chartH * i / 4; grid += `<line x1="${pad.left}" y1="${y}" x2="${width-pad.right}" y2="${y}" stroke="#edf2f7" />`; } rows.forEach((row, idx) => { const cx = pad.left + idx * step + step / 2, x = cx - barW / 2; let y = pad.top + chartH; visible.forEach(name => { const h = row.values[name] / maxTotal * chartH; y -= h; if (h > 0) bars += `<rect x="${x}" y="${y}" width="${barW}" height="${h}" fill="${SOURCE_COLORS[name]}"><title>${row.label} | ${name} | ${formatFull(row.values[name])}</title></rect>`; }); if (row.total > 0) bars += `<text x="${cx}" y="${Math.max(12, y - 5)}" text-anchor="middle" font-size="9" font-weight="800" fill="#60758d">Tổng ${formatCurrency(row.total)}</text>`; if (idx % Math.ceil(rows.length / 18) === 0 || rows.length <= 18) labels += `<text x="${cx}" y="${height-28}" text-anchor="end" transform="rotate(-35 ${cx} ${height-28})" font-size="10" fill="#60758d">${row.label}</text>`; }); document.getElementById("sourceGrowthChart").innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Source of Growth">${grid}<line x1="${pad.left}" y1="${pad.top+chartH}" x2="${width-pad.right}" y2="${pad.top+chartH}" stroke="#d7e4ef" />${bars}${labels}</svg>`; }
+    function render() { const current = filterRecords(REPORT_DATA.records, state.from, state.to); const previousFrom = shiftMonthClamped(state.from, -1), previousTo = shiftMonthClamped(state.to, -1); const previous = filterRecords(REPORT_DATA.records, previousFrom, previousTo); document.getElementById("comparisonNote").innerHTML = `<strong>Kỳ đang xem:</strong> ${periodLabel(state.from, state.to)} &nbsp;•&nbsp; <strong>So sánh cùng ngày tháng trước:</strong> ${periodLabel(previousFrom, previousTo)}`; const s = summarize(current), p = summarize(previous); setMetric("metricRevenue","metricRevenueDelta",s.revenue,p.revenue,formatCurrency,false,previousFrom,previousTo); setMetric("metricVolume","metricVolumeDelta",s.volume,p.volume,formatUnits,false,previousFrom,previousTo); setMetric("metricAsp","metricAspDelta",s.asp,p.asp,formatCurrency,false,previousFrom,previousTo); setMetric("metricCancel","metricCancelDelta",s.cancelRate,p.cancelRate,formatPercent,true,previousFrom,previousTo); renderSourceGrowth(current); renderTrendChart(current); renderBreakdown("channel","c",current,previous); renderBreakdown("group","g",current,previous); renderBreakdown("keySummer","ks",current,previous); renderBreakdown("classify","cl",current,previous); renderSkuTable(current, previous); renderRawTable(current); }
     function renderTrendChart(records) { const rows = aggregateTrendRecords(records); if (!rows.length) { document.getElementById("trendChart").innerHTML = `<div class="empty">Không có dữ liệu.</div>`; return; } const width = Math.max(960, rows.length * 34), height = 420, pad = {top:18,right:56,bottom:72,left:60}; const chartW = width - pad.left - pad.right, chartH = height - pad.top - pad.bottom; const maxRevenue = Math.max(...rows.map(r => r.revenue), 1), maxVolume = Math.max(...rows.map(r => r.volume), 1); const step = chartW / rows.length, barW = Math.max(10, step * .72); let bars = "", labels = "", path = "", dots = "", grid = ""; for (let i = 0; i <= 5; i++) { const y = pad.top + chartH * i / 5; grid += `<line x1="${pad.left}" y1="${y}" x2="${width-pad.right}" y2="${y}" stroke="#dbe6f0" />`; } rows.forEach((row, idx) => { const cx = pad.left + idx * step + step / 2, h = row.revenue / maxRevenue * chartH, x = cx - barW / 2, y = pad.top + chartH - h; bars += `<rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="4" fill="#4d89e8"><title>${row.label} | DT ${formatFull(row.revenue)} | Volume ${formatFull(row.volume)}</title></rect>`; const vy = pad.top + chartH - row.volume / maxVolume * chartH; path += `${idx === 0 ? "M" : "L"} ${cx} ${vy} `; dots += `<circle cx="${cx}" cy="${vy}" r="4.5" fill="#f39a3f"><title>${row.label} | Volume ${formatFull(row.volume)}</title></circle>`; if (idx % Math.ceil(rows.length / 16) === 0 || rows.length <= 16) labels += `<text x="${cx}" y="${height-34}" text-anchor="end" transform="rotate(-35 ${cx} ${height-34})" font-size="11" fill="#60758d">${row.label}</text>`; }); document.getElementById("trendChart").innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="DT và volume theo kỳ">${grid}<line x1="${pad.left}" y1="${pad.top+chartH}" x2="${width-pad.right}" y2="${pad.top+chartH}" stroke="#9fb3c8" />${bars}<path d="${path}" fill="none" stroke="#f39a3f" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"></path>${dots}${labels}</svg>`; }
     function renderBreakdown(prefix, keyField, current, previous) { const rows = sortByRevenue(aggregateBy(current, keyField)); const prevMap = new Map(aggregateBy(previous, keyField).map(row => [row.key, row])); document.getElementById(prefix + "Viz").innerHTML = renderSummaryViz(rows); document.getElementById(prefix + "Table").innerHTML = renderSummaryTable(rows, prevMap, prefix); attachSummarySortHandlers(prefix, rows, prevMap); }
     function renderSummaryViz(rows) { if (!rows.length) return `<div class="empty">Không có dữ liệu.</div>`; const total = rows.reduce((sum,row) => sum + row.revenue, 0); return `<div class="viz-list">${rows.slice(0,8).map((row, idx) => { const share = total ? row.revenue / total * 100 : 0; return `<div class="viz-row"><div class="viz-name">${escapeHtml(row.key)}</div><div class="viz-bar"><div class="viz-fill" style="width:${share}%; background:${PALETTE[idx % PALETTE.length]}"></div></div><div class="viz-meta">${formatCurrency(row.revenue)} · ${formatPercent(share)}</div></div>`; }).join("")}</div>`; }
