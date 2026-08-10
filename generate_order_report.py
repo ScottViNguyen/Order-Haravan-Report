@@ -13,7 +13,11 @@ from openpyxl import load_workbook
 BASE = Path(__file__).resolve().parent
 OUT = BASE / "order_report_from_raw_data.html"
 PRODUCT_FILE = Path("/Users/nguyenhungvi/Downloads/Product Haravan.xlsx")
-PRIORITY_FILE = Path("/Users/nguyenhungvi/Downloads/SKU Priority.xlsx")
+PRIORITY_FILES = (
+    BASE / "SKU Priority.xlsx",
+    Path("/Users/nguyenhungvi/Downloads/SKU Priority.xlsx"),
+)
+PRIORITY_FALLBACK_FILE = BASE / "sku_priority_fallback.json"
 IMAGE_LINK_FILE = Path("/Users/nguyenhungvi/Downloads/link hình ảnh.xlsx")
 IMAGE_LINK_UPDATE_FILE = Path("/Users/nguyenhungvi/Downloads/ link ảnh update.xlsx")
 CONTRIBUTION_FILE = BASE / "% Contribution.xlsx"
@@ -314,36 +318,41 @@ def find_header_row(ws, required):
 
 def load_priority_map():
     priority_map = {}
-    if not PRIORITY_FILE.exists():
-        return priority_map
-
-    wb = load_workbook(PRIORITY_FILE, read_only=True, data_only=True)
-    for ws in wb.worksheets:
-        header_row, headers = find_header_row(ws, ["SKU"])
-        if not header_row:
-            continue
-        idx = {header: pos for pos, header in enumerate(headers) if header}
-        sku_col = idx.get("SKU")
-        priority_col = idx.get("Classify")
-        pm_classify_col = idx.get("PM Classify")
-        group_col = idx.get("Group")
-        product_col = idx.get("Product Name")
-        image_col = idx.get("Image")
-        if sku_col is None or priority_col is None:
-            continue
-
-        for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
-            sku = clean_text(row[sku_col] if sku_col < len(row) else None, "")
-            priority = clean_text(row[priority_col] if priority_col < len(row) else None, "")
-            if not sku or not priority.startswith("Priority"):
+    priority_file = next((path for path in PRIORITY_FILES if path.exists()), None)
+    if priority_file:
+        wb = load_workbook(priority_file, read_only=True, data_only=True)
+        for ws in wb.worksheets:
+            header_row, headers = find_header_row(ws, ["SKU"])
+            if not header_row:
                 continue
-            priority_map[sku] = {
-                "priority": priority,
-                "classify": clean_text(row[pm_classify_col] if pm_classify_col is not None and pm_classify_col < len(row) else None, "Chưa phân loại"),
-                "group": clean_text(row[group_col] if group_col is not None and group_col < len(row) else None, ""),
-                "product": clean_text(row[product_col] if product_col is not None and product_col < len(row) else None, ""),
-                "image": normalize_url(row[image_col]) if image_col is not None and image_col < len(row) else "",
-            }
+            idx = {header: pos for pos, header in enumerate(headers) if header}
+            sku_col = idx.get("SKU")
+            priority_col = idx.get("Classify")
+            pm_classify_col = idx.get("PM Classify")
+            group_col = idx.get("Group")
+            product_col = idx.get("Product Name")
+            image_col = idx.get("Image")
+            if sku_col is None or priority_col is None:
+                continue
+
+            for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+                sku = clean_text(row[sku_col] if sku_col < len(row) else None, "")
+                priority = clean_text(row[priority_col] if priority_col < len(row) else None, "")
+                if not sku or not priority.startswith("Priority"):
+                    continue
+                priority_map[sku] = {
+                    "priority": priority,
+                    "classify": clean_text(row[pm_classify_col] if pm_classify_col is not None and pm_classify_col < len(row) else None, "Chưa phân loại"),
+                    "group": clean_text(row[group_col] if group_col is not None and group_col < len(row) else None, ""),
+                    "product": clean_text(row[product_col] if product_col is not None and product_col < len(row) else None, ""),
+                    "image": normalize_url(row[image_col]) if image_col is not None and image_col < len(row) else "",
+                }
+        if priority_map:
+            return priority_map
+
+    if PRIORITY_FALLBACK_FILE.exists():
+        with open(PRIORITY_FALLBACK_FILE, "r", encoding="utf-8") as fh:
+            priority_map = json.load(fh)
     return priority_map
 
 
