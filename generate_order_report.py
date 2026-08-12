@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 
 BASE = Path(__file__).resolve().parent
 OUT = BASE / "order_report_from_raw_data.html"
+PRODUCT_INFO_FILE = BASE / "product information haravan.xlsx"
 PRODUCT_FILE = Path("/Users/nguyenhungvi/Downloads/Product Haravan.xlsx")
 PRIORITY_FILES = (
     BASE / "SKU Priority.xlsx",
@@ -171,10 +172,29 @@ def fetch_product_image(url):
         return ""
 
 
+def normalize_header(value):
+    return re.sub(r"\s+", " ", clean_text(value, "")).strip().lower()
+
+
+def first_header_index(headers, *names):
+    wanted = {normalize_header(name) for name in names}
+    for idx, header in enumerate(headers):
+        if normalize_header(header) in wanted:
+            return idx
+    return None
+
+
+def all_header_indexes(headers, *names):
+    wanted = {normalize_header(name) for name in names}
+    return [idx for idx, header in enumerate(headers) if normalize_header(header) in wanted]
+
+
 def load_product_map():
     product_map = {}
-    if not PRODUCT_FILE.exists():
-        return product_map
+    product_alias_index = {}
+    product_files = [path for path in (PRODUCT_INFO_FILE, PRODUCT_FILE) if path.exists()]
+    if not product_files:
+        return product_map, product_alias_index
 
     image_cache = {}
     if IMAGE_CACHE.exists():
@@ -183,27 +203,39 @@ def load_product_map():
         except json.JSONDecodeError:
             image_cache = {}
 
-    wb = load_workbook(PRODUCT_FILE, read_only=True, data_only=True)
-    ws = wb.active
-    headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
-    idx = {str(header).strip(): pos for pos, header in enumerate(headers) if header is not None}
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        sku = clean_text(row[idx["Barcode"]], "")
-        if not sku:
+    for product_file in product_files:
+        wb = load_workbook(product_file, read_only=True, data_only=True)
+        ws = wb.active
+        headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        sku_col = first_header_index(headers, "SKU", "Barcode")
+        url_col = first_header_index(headers, "Url", "URL")
+        product_col = first_header_index(headers, "Tên Sản Phẩm", "Tên", "Product Name")
+        alias_cols = all_header_indexes(headers, "Mã sản phẩm", "Mã biến thể", "Barcode")
+        if sku_col is None:
             continue
-        url = normalize_url(row[idx["Url"]])
-        image_url = image_cache.get(url, "")
-        if FETCH_PRODUCT_IMAGES and url and not image_url:
-            image_url = fetch_product_image(url)
-            image_cache[url] = image_url
-        product_map[sku] = {
-            "url": url,
-            "image": image_url,
-            "product": clean_text(row[idx.get("Tên Sản Phẩm", idx["Barcode"])], ""),
-        }
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sku = clean_text(row[sku_col] if sku_col < len(row) else None, "")
+            if not sku:
+                continue
+            url = normalize_url(row[url_col] if url_col is not None and url_col < len(row) else "")
+            image_url = image_cache.get(url, "")
+            if FETCH_PRODUCT_IMAGES and url and not image_url:
+                image_url = fetch_product_image(url)
+                image_cache[url] = image_url
+            product_map[sku] = {
+                "url": url,
+                "image": image_url,
+                "product": clean_text(row[product_col] if product_col is not None and product_col < len(row) else None, ""),
+            }
+            product_alias_index[sku] = sku
+            for alias_col in alias_cols:
+                alias = clean_text(row[alias_col] if alias_col < len(row) else None, "")
+                if alias:
+                    product_alias_index[alias] = sku
 
     IMAGE_CACHE.write_text(json.dumps(image_cache, ensure_ascii=False, indent=2), encoding="utf-8")
-    return product_map
+    return product_map, product_alias_index
 
 
 def load_image_link_workbook(path):
@@ -359,7 +391,7 @@ def load_priority_map():
 def read_records():
     raw = []
     order_buckets = defaultdict(list)
-    product_map = load_product_map()
+    product_map, product_alias_index = load_product_map()
     priority_map = load_priority_map()
     image_link_map = load_image_link_map()
     product_model_index = build_model_index(product_map)
@@ -385,7 +417,8 @@ def read_records():
             product = clean_text(row[idx["Tên sản phẩm"]], "Không có tên sản phẩm")
             model = extract_model(product)
             sku = (
-                priority_model_index.get(model)
+                product_alias_index.get(barcode)
+                or priority_model_index.get(model)
                 or product_model_index.get(model)
                 or (barcode if barcode in priority_map or barcode in product_map else barcode)
             )
@@ -398,7 +431,7 @@ def read_records():
             payment = clean_text(row[idx["Phương thức thanh toán"]], "Không xác định")
             priority = priority_info.get("priority", "Others")
             classify = priority_info.get("classify", "Chưa phân loại")
-            image_url = image_link_map.get(sku) or priority_info.get("image") or product_info.get("image", "")
+            image_url = image_link_map.get(sku) or image_link_map.get(barcode) or priority_info.get("image") or product_info.get("image", "")
             product_url = product_info.get("url", "")
 
             item = {
