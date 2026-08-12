@@ -22,6 +22,7 @@ PRIORITY_FALLBACK_FILE = BASE / "sku_priority_fallback.json"
 IMAGE_LINK_FILE = Path("/Users/nguyenhungvi/Downloads/link hình ảnh.xlsx")
 IMAGE_LINK_UPDATE_FILE = Path("/Users/nguyenhungvi/Downloads/ link ảnh update.xlsx")
 CONTRIBUTION_FILE = BASE / "% Contribution.xlsx"
+AFFILIATE_DIR = BASE / "Order affiliate"
 IMAGE_CACHE = BASE / "product_image_cache.json"
 LOCAL_IMAGE_DIR = BASE / "product_images"
 FETCH_PRODUCT_IMAGES = False
@@ -95,10 +96,10 @@ def infer_group(product):
 def extract_model(product_name):
     text = clean_text(product_name, "")
     patterns = [
-        r"\b([A-Z]{2,5}-\d{3,5}[A-Z]?)\b",
-        r"\b([A-Z]{2,5}\d{3,5}[A-Z]?)\b",
-        r"\b([A-Z]{2,5}-[A-Z]{2,5}-\d{3,5}[A-Z]?)\b",
-        r"\b([A-Z]{2,8}\d{2,5}[A-Z0-9]{2,10})\b",
+        r"\b([A-Z]{2,5}-\d{3,5}[A-Z]?)(?=[^A-Z0-9]|$)",
+        r"\b([A-Z]{2,5}\d{3,5}[A-Z]?)(?=[^A-Z0-9]|$)",
+        r"\b([A-Z]{2,5}-[A-Z]{2,5}-\d{3,5}[A-Z]?)(?=[^A-Z0-9]|$)",
+        r"\b([A-Z]{2,8}\d{2,5}[A-Z0-9]{2,10})(?=[^A-Z0-9]|$)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -340,6 +341,47 @@ def build_model_index(mapping):
     return model_index
 
 
+def resolve_sku_from_product(code, product, product_alias_index, product_model_index, priority_model_index):
+    code = clean_text(code, "")
+    model = extract_model(product)
+    return (
+        product_alias_index.get(code)
+        or product_model_index.get(model)
+        or priority_model_index.get(model)
+        or ""
+    )
+
+
+def load_affiliate_order_keys(product_alias_index, product_model_index, priority_model_index):
+    keys = set()
+    if not AFFILIATE_DIR.exists():
+        return keys
+
+    for file in sorted(AFFILIATE_DIR.glob("**/*.xlsx")):
+        wb = load_workbook(file, read_only=True, data_only=True)
+        ws = wb.active
+        headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        idx = {header: pos for pos, header in enumerate(headers) if header}
+        order_col = idx.get("Mã đơn hàng")
+        if order_col is None:
+            order_col = idx.get("ID đơn hàng")
+        product_col = idx.get("Tên sản phẩm")
+        code_col = idx.get("Mã sản phẩm")
+        if code_col is None:
+            code_col = idx.get("ID SKU")
+        if order_col is None or product_col is None:
+            continue
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            order_id = clean_text(row[order_col] if order_col < len(row) else None, "")
+            product = clean_text(row[product_col] if product_col < len(row) else None, "")
+            code = row[code_col] if code_col is not None and code_col < len(row) else ""
+            sku = resolve_sku_from_product(code, product, product_alias_index, product_model_index, priority_model_index)
+            if order_id and sku:
+                keys.add((order_id, sku))
+    return keys
+
+
 def find_header_row(ws, required):
     required = set(required)
     for row_number, row in enumerate(ws.iter_rows(values_only=True), start=1):
@@ -397,6 +439,7 @@ def read_records():
     image_link_map = load_image_link_map()
     product_model_index = build_model_index(product_map)
     priority_model_index = build_model_index(priority_map)
+    affiliate_keys = load_affiliate_order_keys(product_alias_index, product_model_index, priority_model_index)
     files = sorted(BASE.glob("Orders_T*.xlsx"), key=month_key)
 
     for file in files:
@@ -418,9 +461,7 @@ def read_records():
             product = clean_text(row[idx["Tên sản phẩm"]], "Không có tên sản phẩm")
             model = extract_model(product)
             sku = (
-                product_alias_index.get(barcode)
-                or product_model_index.get(model)
-                or priority_model_index.get(model)
+                resolve_sku_from_product(barcode, product, product_alias_index, product_model_index, priority_model_index)
                 or (barcode if barcode in priority_map or barcode in product_map else barcode)
             )
             product_info = product_map.get(sku, {})
@@ -442,6 +483,8 @@ def read_records():
                 "x": cancel,
                 "q": round(qty, 4),
                 "r": 0,
+                "qa": 0,
+                "ra": 0,
                 "_gross": gross_revenue,
                 "_order_total": as_number(row[idx["Tổng cộng"]]),
                 "s": sku,
@@ -478,6 +521,9 @@ def read_records():
             order_items[-1]["r"] = round(order_total - allocated, 2)
 
     for item in raw:
+        if (item.get("o"), item.get("s")) in affiliate_keys:
+            item["qa"] = item.get("q", 0)
+            item["ra"] = item.get("r", 0)
         item.pop("_gross", None)
         item.pop("_order_total", None)
     return raw
@@ -620,7 +666,7 @@ def html_template(report_json):
     .raw-thumb { width: 72px; height: 72px; }
     .product-link { color: var(--blue); font-weight: 800; text-decoration: none; }
     .product-link:hover { text-decoration: underline; }
-    .raw-table table { min-width: 1320px; }
+    .raw-table table { min-width: 1480px; }
     .raw-product { max-width: 280px; white-space: normal; line-height: 1.35; }
     .empty { padding: 30px 0; text-align: center; color: var(--muted); }
     .summary-total { margin-top: 12px; padding: 14px; border-radius: 16px; background: #fff; border: 1px solid #dde9f5; }
@@ -833,13 +879,13 @@ def html_template(report_json):
       return `<div class="table-scroll sku-trend-table"><table><thead><tr><th></th><th>Ảnh</th><th>SKU</th><th>Group</th><th>DT</th><th>% Δ</th><th>Kênh</th></tr></thead><tbody>${body}</tbody></table></div>`;
     }
     function rawPeriodInfo(iso) { const p = getDateParts(iso); if (state.rawPeriod === "day") return { key: iso, label: iso, year: p.year }; if (state.rawPeriod === "month") return { key: `${p.year}-${String(p.month).padStart(2,"0")}`, label: `tháng ${p.month}`, year: p.year }; if (state.rawPeriod === "year") return { key: String(p.year), label: String(p.year), year: p.year }; return { key: `${p.weekYear}-W${String(p.week).padStart(2,"0")}`, label: String(p.week), year: p.weekYear }; }
-    function aggregateRawData(records) { const map = new Map(); for (const item of records) { const period = rawPeriodInfo(item.d), key = [item.s,item.c,period.key].join("||"); const row = map.get(key) || { image:item.i, url:item.u, barcode:item.s, product:item.p, group:item.g, priority:item.ks, classify:item.cl, orderDateLabel:period.label, orderYear:period.year, channel:item.c, revenue:0, volume:0 }; row.revenue += item.r; row.volume += item.q; if (!row.image && item.i) row.image = item.i; if (!row.url && item.u) row.url = item.u; map.set(key,row); } return Array.from(map.values()).map(row => ({...row, asp: row.volume ? row.revenue / row.volume : 0})).sort((a,b) => b.revenue - a.revenue); }
-    function renderRawTable(current) { const rows = aggregateRawData(current).slice(0, 600); if (!rows.length) { document.getElementById("rawTable").innerHTML = `<div class="empty">Không có dữ liệu.</div>`; return; } const periodLabel = state.rawPeriod === "month" ? "Order Date (Tháng)" : state.rawPeriod === "year" ? "Order Date (Năm)" : state.rawPeriod === "day" ? "Ngày đặt hàng" : "Order Date (Tuần)"; const body = rows.map((row, idx) => { const name = row.url ? `<a class="product-link" href="${escapeAttr(row.url)}" target="_blank" rel="noopener">${escapeHtml(row.product)}</a>` : escapeHtml(row.product); const img = imageSrc(row); return `<tr><td class="rank">${idx+1}.</td><td>${img ? `<img class="raw-thumb" src="${escapeAttr(img)}" alt="${escapeAttr(row.product)}" loading="lazy" />` : ""}</td><td><span class="sku-code">${escapeHtml(row.barcode)}</span></td><td class="raw-product">${name}</td><td>${escapeHtml(row.group)}</td><td>${escapeHtml(row.priority)}</td><td>${escapeHtml(row.classify)}</td><td>${escapeHtml(row.orderDateLabel)}</td><td>${escapeHtml(String(row.orderYear))}</td><td>${escapeHtml(row.channel)}</td><td>${formatCurrency(row.revenue)}</td><td>${formatUnits(row.volume)}</td><td>${formatCurrency(row.asp)}</td></tr>`; }).join(""); document.getElementById("rawTable").innerHTML = `<div class="table-scroll raw-table"><table><thead><tr><th></th><th>Ảnh</th><th>Barcode</th><th>Tên sản phẩm</th><th>Group</th><th>Priority</th><th>Classify</th><th>${periodLabel}</th><th>Năm</th><th>Kênh bán hàng</th><th>DT</th><th>Volume</th><th>ASP</th></tr></thead><tbody>${body}</tbody></table></div>`; }
+    function aggregateRawData(records) { const map = new Map(); for (const item of records) { const period = rawPeriodInfo(item.d), key = [item.s,item.c,period.key].join("||"); const row = map.get(key) || { image:item.i, url:item.u, barcode:item.s, product:item.p, group:item.g, priority:item.ks, classify:item.cl, orderDateLabel:period.label, orderYear:period.year, channel:item.c, revenue:0, volume:0, affRevenue:0, affVolume:0 }; row.revenue += item.r; row.volume += item.q; row.affRevenue += item.ra || 0; row.affVolume += item.qa || 0; if (!row.image && item.i) row.image = item.i; if (!row.url && item.u) row.url = item.u; map.set(key,row); } return Array.from(map.values()).map(row => ({...row, asp: row.volume ? row.revenue / row.volume : 0})).sort((a,b) => b.revenue - a.revenue); }
+    function renderRawTable(current) { const rows = aggregateRawData(current).slice(0, 600); if (!rows.length) { document.getElementById("rawTable").innerHTML = `<div class="empty">Không có dữ liệu.</div>`; return; } const periodLabel = state.rawPeriod === "month" ? "Order Date (Tháng)" : state.rawPeriod === "year" ? "Order Date (Năm)" : state.rawPeriod === "day" ? "Ngày đặt hàng" : "Order Date (Tuần)"; const body = rows.map((row, idx) => { const name = row.url ? `<a class="product-link" href="${escapeAttr(row.url)}" target="_blank" rel="noopener">${escapeHtml(row.product)}</a>` : escapeHtml(row.product); const img = imageSrc(row); return `<tr><td class="rank">${idx+1}.</td><td>${img ? `<img class="raw-thumb" src="${escapeAttr(img)}" alt="${escapeAttr(row.product)}" loading="lazy" />` : ""}</td><td><span class="sku-code">${escapeHtml(row.barcode)}</span></td><td class="raw-product">${name}</td><td>${escapeHtml(row.group)}</td><td>${escapeHtml(row.priority)}</td><td>${escapeHtml(row.classify)}</td><td>${escapeHtml(row.orderDateLabel)}</td><td>${escapeHtml(String(row.orderYear))}</td><td>${escapeHtml(row.channel)}</td><td>${formatCurrency(row.revenue)}</td><td>${formatUnits(row.volume)}</td><td>${formatCurrency(row.affRevenue)}</td><td>${formatUnits(row.affVolume)}</td><td>${formatCurrency(row.asp)}</td></tr>`; }).join(""); document.getElementById("rawTable").innerHTML = `<div class="table-scroll raw-table"><table><thead><tr><th></th><th>Ảnh</th><th>Barcode</th><th>Tên sản phẩm</th><th>Group</th><th>Priority</th><th>Classify</th><th>${periodLabel}</th><th>Năm</th><th>Kênh bán hàng</th><th>DT</th><th>Volume</th><th>Dthu aff</th><th>Volume aff</th><th>ASP</th></tr></thead><tbody>${body}</tbody></table></div>`; }
     function buildCsv(header, rows) { return "\\uFEFF" + [header].concat(rows).map(cols => cols.map(value => `"${String(value ?? "").replaceAll('"','""')}"`).join(",")).join("\\r\\n"); }
     function downloadFile(name, csv) { const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"}); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = name; a.style.display = "none"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
     function downloadSkuData() { const rows = sortByRevenue(aggregateSku(filterRecords(REPORT_DATA.records, state.from, state.to))); downloadFile("sku_detail_export.csv", buildCsv(["image","product_url","barcode","variant_id","product_name","group","priority","classify","revenue","volume","asp"], rows.map(row => [row.image || "",row.url || "",row.sku,row.variant,row.product,row.group,row.keySummer,row.classify,row.revenue,row.volume,row.volume ? row.revenue / row.volume : 0]))); }
     function downloadGroupData() { const rows = sortByRevenue(aggregateBy(filterRecords(REPORT_DATA.records, state.from, state.to), "g")); const total = rows.reduce((s,r) => s + r.revenue, 0); downloadFile("group_performance_export.csv", buildCsv(["group","revenue","volume","asp","share"], rows.map(row => [row.key,row.revenue,row.volume,row.volume ? row.revenue / row.volume : 0,total ? row.revenue / total * 100 : 0]))); }
-    function downloadRawData() { const rows = aggregateRawData(filterRecords(REPORT_DATA.records, state.from, state.to)); downloadFile(`order_haravan_raw_${state.rawPeriod}.csv`, buildCsv(["image","product_url","barcode","product_name","group","priority","product_classify","order_period","order_year","sales_channel","revenue","volume","asp"], rows.map(row => [row.image || "",row.url || "",row.barcode,row.product,row.group,row.priority,row.classify,row.orderDateLabel,row.orderYear,row.channel,row.revenue,row.volume,row.asp]))); }
+    function downloadRawData() { const rows = aggregateRawData(filterRecords(REPORT_DATA.records, state.from, state.to)); downloadFile(`order_haravan_raw_${state.rawPeriod}.csv`, buildCsv(["image","product_url","barcode","product_name","group","priority","product_classify","order_period","order_year","sales_channel","revenue","volume","affiliate_revenue","affiliate_volume","asp"], rows.map(row => [row.image || "",row.url || "",row.barcode,row.product,row.group,row.priority,row.classify,row.orderDateLabel,row.orderYear,row.channel,row.revenue,row.volume,row.affRevenue,row.affVolume,row.asp]))); }
     setup();
   </script>
 </body>
