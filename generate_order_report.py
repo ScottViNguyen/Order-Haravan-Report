@@ -98,6 +98,7 @@ def extract_model(product_name):
         r"\b([A-Z]{2,5}-\d{3,5}[A-Z]?)\b",
         r"\b([A-Z]{2,5}\d{3,5}[A-Z]?)\b",
         r"\b([A-Z]{2,5}-[A-Z]{2,5}-\d{3,5}[A-Z]?)\b",
+        r"\b([A-Z]{2,8}\d{2,5}[A-Z0-9]{2,10})\b",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -418,12 +419,12 @@ def read_records():
             model = extract_model(product)
             sku = (
                 product_alias_index.get(barcode)
-                or priority_model_index.get(model)
                 or product_model_index.get(model)
+                or priority_model_index.get(model)
                 or (barcode if barcode in priority_map or barcode in product_map else barcode)
             )
             product_info = product_map.get(sku, {})
-            priority_info = priority_map.get(sku, {})
+            priority_info = priority_map.get(sku) or priority_map.get(barcode, {})
             product = priority_info.get("product") or product_info.get("product") or product
             group = priority_info.get("group") or infer_group(product)
             channel = clean_text(row[idx["Kênh bán hàng"]], "Không xác định").lower()
