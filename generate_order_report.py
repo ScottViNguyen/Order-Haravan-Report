@@ -28,6 +28,7 @@ LOCAL_IMAGE_DIR = BASE / "product_images"
 FETCH_PRODUCT_IMAGES = False
 DOWNLOAD_IMAGE_FILES = True
 SOURCE_TYPES = ("Product Cart", "Livestream", "Video", "Affiliate")
+VAT_DIVISOR = 1.08
 
 
 def as_number(value):
@@ -486,7 +487,7 @@ def read_records():
                 "qa": 0,
                 "ra": 0,
                 "_gross": gross_revenue,
-                "_order_total": as_number(row[idx["Tổng cộng"]]),
+                "_order_total": as_number(row[idx["Tổng cộng"]]) / VAT_DIVISOR,
                 "s": sku,
                 "v": barcode,
                 "p": product,
@@ -741,7 +742,7 @@ def html_template(report_json):
       <div class="panel-toolbar"><div class="subtle">Top SKU theo DT, có thể sắp xếp theo Barcode, sản phẩm, group, DT, volume, ASP.</div><button id="downloadSkuData" class="download-btn">Tải data</button></div>
       <h3>Top SKU theo DT</h3><div id="skuTable"></div>
       <section class="stacked-panels"><article class="panel"><h3>Top 20 Growth</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuGrowthTable"></div></article><article class="panel"><h3>Top 20 Reduce</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuReduceTable"></div></article></section>
-      <div class="note">Nguồn dữ liệu: các file Orders_T*.xlsx trong folder hiện tại, Product Haravan.xlsx để join link/ảnh sản phẩm, và SKU Priority.xlsx để phân loại Priority. DT = Tổng cộng sau giảm giá theo mã đơn duy nhất; với đơn có nhiều sản phẩm, DT được phân bổ về từng dòng theo tỷ trọng Giá sản phẩm x Số lượng để tránh nhân đôi mã đơn. Dấu chấm/dấu phẩy số dùng locale vi-VN.</div>
+      <div class="note">Nguồn dữ liệu: các file Orders_T*.xlsx trong folder hiện tại, Product Haravan.xlsx để join link/ảnh sản phẩm, và SKU Priority.xlsx để phân loại Priority. DT = Tổng cộng sau giảm giá theo mã đơn duy nhất, đã trừ VAT 8%; với đơn có nhiều sản phẩm, DT được phân bổ về từng dòng theo tỷ trọng Giá sản phẩm x Số lượng để tránh nhân đôi mã đơn. Dấu chấm/dấu phẩy số dùng locale vi-VN.</div>
     </section>
 
     <h2 class="section-title">6. Raw Data</h2>
