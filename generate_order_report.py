@@ -345,10 +345,14 @@ def build_model_index(mapping):
 def resolve_sku_from_product(code, product, product_alias_index, product_model_index, priority_model_index):
     code = clean_text(code, "")
     model = extract_model(product)
+    product_sku = product_model_index.get(model)
+    priority_sku = priority_model_index.get(model)
+    if product_sku and priority_sku and priority_sku.isdigit() and not product_sku.isdigit():
+        priority_sku = ""
     return (
         product_alias_index.get(code)
-        or product_model_index.get(model)
-        or priority_model_index.get(model)
+        or priority_sku
+        or product_sku
         or ""
     )
 
