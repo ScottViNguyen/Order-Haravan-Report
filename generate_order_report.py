@@ -582,6 +582,7 @@ def html_template(report_json):
     .page { max-width: 1500px; margin: 0 auto; padding: 18px 18px 60px; }
     .hero, .filter-card, .panel, .metric { background: var(--card); border: 1px solid rgba(23,71,115,.08); border-radius: var(--radius); box-shadow: var(--shadow); }
     .hero { border-radius: 26px; padding: 22px; margin-bottom: 18px; border-color: rgba(77,137,232,.15); }
+    .hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
     .hero h1 { margin: 0; font-size: 30px; line-height: 1.1; }
     .hero p { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
     .filters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
@@ -680,14 +681,19 @@ def html_template(report_json):
     .summary-stat-label { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; }
     .summary-stat-value { margin-top: 4px; font-size: 20px; font-weight: 800; line-height: 1.05; }
     @media (max-width: 1200px) { .filters, .metrics, .breakdown-grid, .grid-2 { grid-template-columns: 1fr 1fr; } }
-    @media (max-width: 760px) { .filters, .metrics, .breakdown-grid, .grid-2, .summary-total-grid, .source-cards { grid-template-columns: 1fr; } .source-head { flex-direction: column; } .hero h1 { font-size: 24px; } .metric .value, .source-card .source-value { font-size: 28px; } }
+    @media (max-width: 760px) { .filters, .metrics, .breakdown-grid, .grid-2, .summary-total-grid, .source-cards { grid-template-columns: 1fr; } .source-head, .hero-top { flex-direction: column; } .hero h1 { font-size: 24px; } .metric .value, .source-card .source-value { font-size: 28px; } }
   </style>
 </head>
 <body>
   <div class="page">
     <section class="hero">
-      <h1>Order Haravan Report</h1>
-      <p id="heroMeta"></p>
+      <div class="hero-top">
+        <div>
+          <h1>Order Haravan Report</h1>
+          <p id="heroMeta"></p>
+        </div>
+        <button id="downloadSummaryReport" class="download-btn">Tải report tổng</button>
+      </div>
     </section>
     <section class="filters">
       <div class="filter-card"><label for="fromDate">Từ ngày</label><input id="fromDate" type="date" /></div>
@@ -783,6 +789,7 @@ def html_template(report_json):
       document.getElementById("downloadSkuData").addEventListener("click", downloadSkuData);
       document.getElementById("downloadGroupData").addEventListener("click", downloadGroupData);
       document.getElementById("downloadRawData").addEventListener("click", downloadRawData);
+      document.getElementById("downloadSummaryReport").addEventListener("click", downloadSummaryReport);
       document.addEventListener("click", handleOutsideClick);
       render();
     }
@@ -942,6 +949,125 @@ def html_template(report_json):
     function downloadSkuData() { const rows = sortByRevenue(aggregateSku(filterRecords(REPORT_DATA.records, state.from, state.to))); downloadFile("sku_detail_export.csv", buildCsv(["image","product_url","barcode","variant_id","product_name","group","priority","classify","revenue","volume","asp"], rows.map(row => [row.image || "",row.url || "",row.sku,row.variant,row.product,row.group,row.keySummer,row.classify,row.revenue,row.volume,row.volume ? row.revenue / row.volume : 0]))); }
     function downloadGroupData() { const rows = sortByRevenue(aggregateBy(filterRecords(REPORT_DATA.records, state.from, state.to), "g")); const total = rows.reduce((s,r) => s + r.revenue, 0); downloadFile("group_performance_export.csv", buildCsv(["group","revenue","volume","asp","share"], rows.map(row => [row.key,row.revenue,row.volume,row.volume ? row.revenue / row.volume : 0,total ? row.revenue / total * 100 : 0]))); }
     function downloadRawData() { const rows = aggregateRawData(filterRecords(REPORT_DATA.records, state.from, state.to)); downloadFile(`order_haravan_raw_${state.rawPeriod}.csv`, buildCsv(["image","product_url","barcode","product_name","group","priority","product_classify","order_period","order_year","sales_channel","revenue","volume","affiliate_revenue","affiliate_volume","asp"], rows.map(row => [row.image || "",row.url || "",row.barcode,row.product,row.group,row.priority,row.classify,row.orderDateLabel,row.orderYear,row.channel,row.revenue,row.volume,row.affRevenue,row.affVolume,row.asp]))); }
+    function asMillion(value) { return Math.round(Number(value || 0) / 10000) / 100; }
+    function percentValue(value) { return Math.round(Number(value || 0) * 100) / 100; }
+    function rowMetrics(row, prev, totalRevenue) { const asp = row.volume ? row.revenue / row.volume : 0, prevAsp = prev.volume ? prev.revenue / prev.volume : 0; return [asMillion(prev.revenue || 0), asMillion(row.revenue || 0), asMillion((row.revenue || 0) - (prev.revenue || 0)), percentValue(pctDelta(row.revenue || 0, prev.revenue || 0)), Math.round(row.volume || 0), asMillion(asp), percentValue(row.cancelRate || 0), percentValue(totalRevenue ? row.revenue / totalRevenue * 100 : 0), asMillion(row.channelRevenue?.shopee || 0), asMillion(row.channelRevenue?.tiktokshop || 0), asMillion(row.channelRevenue?.web || 0), asMillion(prev.channelRevenue?.shopee || 0), asMillion(prev.channelRevenue?.tiktokshop || 0), asMillion(prev.channelRevenue?.web || 0), percentValue(pctDelta(asp, prevAsp))]; }
+    function exportPeriodRows() {
+      const comparison = resolveComparison();
+      const current = filterRecords(REPORT_DATA.records, state.from, state.to);
+      const previous = comparison.enabled ? filterRecords(REPORT_DATA.records, comparison.from, comparison.to) : [];
+      return { current, previous, comparison };
+    }
+    function summarySheetRows(current, previous, comparison) {
+      const cur = summarize(current), prev = summarize(previous), total = cur.revenue;
+      const rows = [
+        [`ORDER HARAVAN REPORT ${periodLabel(state.from, state.to)}`, "", "", "", "", "", "", "", "", ""],
+        [`Unit: million VND | DT đã trừ VAT 8% | Generated ${new Date(REPORT_DATA.meta.generatedAt).toLocaleString("vi-VN")}`],
+        [],
+        ["Metric", "Previous", "Current", "Vs Prev", "% vs Prev"],
+        ["MTD NMV", asMillion(prev.revenue), asMillion(cur.revenue), asMillion(cur.revenue - prev.revenue), percentValue(pctDelta(cur.revenue, prev.revenue))],
+        ["Volume", Math.round(prev.volume), Math.round(cur.volume), Math.round(cur.volume - prev.volume), percentValue(pctDelta(cur.volume, prev.volume))],
+        ["ASP", asMillion(prev.asp), asMillion(cur.asp), asMillion(cur.asp - prev.asp), percentValue(pctDelta(cur.asp, prev.asp))],
+        ["% Hủy", percentValue(prev.cancelRate), percentValue(cur.cancelRate), percentValue(cur.cancelRate - prev.cancelRate), percentValue(pctDelta(cur.cancelRate, prev.cancelRate))],
+        [],
+        ["1. REVENUE BY CHANNEL / SOURCE"],
+        ["Channel / Source", "Previous", "Current", "Vs Prev", "% vs Prev", "Volume", "ASP", "% Hủy", "% Cont.", "Shopee", "TikTok", "Web"],
+      ];
+      const channelPrev = new Map(aggregateBy(previous, "c").map(row => [row.key, row]));
+      for (const row of sortByRevenue(aggregateBy(current, "c"))) {
+        const prevRow = channelPrev.get(row.key) || { revenue:0, volume:0, cancelRate:0, channelRevenue:{} };
+        rows.push([row.key].concat(rowMetrics(row, prevRow, total).slice(0, 11)));
+      }
+      rows.push([]);
+      rows.push(["Source of Growth", "Previous", "Current", "Vs Prev", "% vs Prev", "Shopee", "TikTok"]);
+      const sourcePrev = new Map(aggregateSourceCards(previous).map(row => [row.name, row]));
+      for (const row of aggregateSourceCards(current)) {
+        const prevRow = sourcePrev.get(row.name) || { revenue:0, shopee:0, tiktokshop:0 };
+        rows.push([row.name, asMillion(prevRow.revenue), asMillion(row.revenue), asMillion(row.revenue - prevRow.revenue), percentValue(pctDelta(row.revenue, prevRow.revenue)), asMillion(row.shopee), asMillion(row.tiktokshop)]);
+      }
+      rows.push([]);
+      rows.push(["Period", state.from, state.to, comparison.enabled ? comparison.from : "", comparison.enabled ? comparison.to : ""]);
+      return rows;
+    }
+    function breakdownSheetRows(title, label, rows, prevMap) {
+      const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0);
+      const out = [[title], [], [label, "Previous", "Current", "Vs Prev", "% vs Prev", "Volume", "ASP", "% Hủy", "% Cont.", "Shopee", "TikTok", "Web", "Prev Shopee", "Prev TikTok", "Prev Web", "ASP % vs Prev"]];
+      for (const row of sortByRevenue(rows).slice(0, 20)) out.push([row.key].concat(rowMetrics(row, prevMap.get(row.key) || { revenue:0, volume:0, cancelRate:0, channelRevenue:{} }, totalRevenue)));
+      return out;
+    }
+    function skuSheetRows(title, rows, prevMap) {
+      const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0);
+      const out = [[title], [], ["SKU", "Product", "Group", "Priority", "Classify", "Previous", "Current", "Vs Prev", "% vs Prev", "Volume", "ASP", "% Hủy", "% Cont.", "Shopee", "TikTok", "Web"]];
+      for (const row of rows.slice(0, 20)) {
+        const prev = prevMap.get(row.sku) || { revenue:0, volume:0, cancelRate:0, channelRevenue:{} };
+        out.push([row.sku, row.product, row.group, row.keySummer, row.classify].concat(rowMetrics(row, prev, totalRevenue).slice(0, 11)));
+      }
+      return out;
+    }
+    function downloadSummaryReport() {
+      const { current, previous, comparison } = exportPeriodRows();
+      const groupRows = sortByRevenue(aggregateBy(current, "g"));
+      const keyRows = sortByRevenue(aggregateBy(current, "ks"));
+      const classifyRows = sortByRevenue(aggregateBy(current, "cl"));
+      const skuRows = sortByRevenue(aggregateSku(current));
+      const skuPrevMap = new Map(aggregateSku(previous).map(row => [row.sku, row]));
+      const sourceTrend = aggregateSourceTrend(current).map(row => [row.label, asMillion(row.total)].concat(SOURCE_TYPES.map(name => asMillion(row.values[name] || 0))));
+      const sheets = [
+        { name:"Summary", rows:summarySheetRows(current, previous, comparison) },
+        { name:"Top Group", rows:breakdownSheetRows("2. TOP GROUPS", "Group", groupRows, new Map(aggregateBy(previous, "g").map(row => [row.key, row]))) },
+        { name:"Priority", rows:breakdownSheetRows("3. PRIORITY", "Priority", keyRows, new Map(aggregateBy(previous, "ks").map(row => [row.key, row]))) },
+        { name:"Classify", rows:breakdownSheetRows("4. CLASSIFY", "Classify", classifyRows, new Map(aggregateBy(previous, "cl").map(row => [row.key, row]))) },
+        { name:"Top SKU", rows:skuSheetRows("5. KEY PRODUCT", skuRows, skuPrevMap) },
+        { name:"Top Growth", rows:skuSheetRows("6. TOP 20 GROWTH SKU", getSkuTrendRows(skuRows, skuPrevMap, "growth"), skuPrevMap) },
+        { name:"Top Reduce", rows:skuSheetRows("7. TOP 20 REDUCE SKU", getSkuTrendRows(skuRows, skuPrevMap, "reduce"), skuPrevMap) },
+        { name:"Source Growth", rows:[["SOURCE OF GROWTH"], [], ["Period", "Total"].concat(SOURCE_TYPES)].concat(sourceTrend) },
+      ];
+      downloadXlsx(`order_haravan_summary_${state.from}_${state.to}.xlsx`, sheets);
+    }
+    function xmlEscape(value) { return String(value ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;"); }
+    function colName(index) { let name = ""; while (index > 0) { const rem = (index - 1) % 26; name = String.fromCharCode(65 + rem) + name; index = Math.floor((index - 1) / 26); } return name; }
+    function worksheetXml(rows) {
+      const maxCols = Math.max(1, ...rows.map(row => row.length));
+      const ref = `A1:${colName(maxCols)}${Math.max(rows.length, 1)}`;
+      const sheetData = rows.map((row, rIdx) => `<row r="${rIdx + 1}">${row.map((value, cIdx) => { if (value === "" || value === null || value === undefined) return ""; const ref = `${colName(cIdx + 1)}${rIdx + 1}`; if (typeof value === "number" && Number.isFinite(value)) return `<c r="${ref}"><v>${value}</v></c>`; return `<c r="${ref}" t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`; }).join("")}</row>`).join("");
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${ref}"/><sheetData>${sheetData}</sheetData></worksheet>`;
+    }
+    function crc32(bytes) { let c = -1; for (const b of bytes) { c ^= b; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1)); } return (c ^ -1) >>> 0; }
+    function u16(value) { return [value & 255, value >>> 8 & 255]; }
+    function u32(value) { return [value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255]; }
+    function makeZip(files) {
+      const enc = new TextEncoder(), chunks = [], central = []; let offset = 0;
+      for (const file of files) {
+        const name = enc.encode(file.name), data = enc.encode(file.data), crc = crc32(data);
+        const local = new Uint8Array([0x50,0x4b,0x03,0x04,20,0,0,0,0,0,0,0,0,0,...u32(crc),...u32(data.length),...u32(data.length),...u16(name.length),0,0]);
+        chunks.push(local, name, data);
+        central.push({ name, crc, size:data.length, offset });
+        offset += local.length + name.length + data.length;
+      }
+      const centralStart = offset;
+      for (const file of central) {
+        const header = new Uint8Array([0x50,0x4b,0x01,0x02,20,0,20,0,0,0,0,0,0,0,0,0,...u32(file.crc),...u32(file.size),...u32(file.size),...u16(file.name.length),0,0,0,0,0,0,0,0,0,0,0,0,...u32(file.offset)]);
+        chunks.push(header, file.name);
+        offset += header.length + file.name.length;
+      }
+      const centralSize = offset - centralStart;
+      chunks.push(new Uint8Array([0x50,0x4b,0x05,0x06,0,0,0,0,...u16(central.length),...u16(central.length),...u32(centralSize),...u32(centralStart),0,0]));
+      return new Blob(chunks, { type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    }
+    function downloadXlsx(name, sheets) {
+      const workbookSheets = sheets.map((sheet, idx) => `<sheet name="${xmlEscape(sheet.name.slice(0,31))}" sheetId="${idx + 1}" r:id="rId${idx + 1}"/>`).join("");
+      const workbookRels = sheets.map((sheet, idx) => `<Relationship Id="rId${idx + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${idx + 1}.xml"/>`).join("");
+      const overrides = sheets.map((sheet, idx) => `<Override PartName="/xl/worksheets/sheet${idx + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("");
+      const files = [
+        { name:"[Content_Types].xml", data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${overrides}</Types>` },
+        { name:"_rels/.rels", data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+        { name:"xl/workbook.xml", data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${workbookSheets}</sheets></workbook>` },
+        { name:"xl/_rels/workbook.xml.rels", data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${workbookRels}</Relationships>` },
+      ];
+      sheets.forEach((sheet, idx) => files.push({ name:`xl/worksheets/sheet${idx + 1}.xml`, data:worksheetXml(sheet.rows) }));
+      const url = URL.createObjectURL(makeZip(files)), a = document.createElement("a");
+      a.href = url; a.download = name; a.style.display = "none"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    }
     setup();
   </script>
 </body>
