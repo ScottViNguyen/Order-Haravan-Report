@@ -367,13 +367,13 @@ def load_affiliate_order_keys(product_alias_index, product_model_index, priority
         ws = wb.active
         headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
         idx = {header: pos for pos, header in enumerate(headers) if header}
-        order_col = idx.get("Mã đơn hàng")
-        if order_col is None:
-            order_col = idx.get("ID đơn hàng")
-        product_col = idx.get("Tên sản phẩm")
-        code_col = idx.get("Mã sản phẩm")
-        if code_col is None:
-            code_col = idx.get("ID SKU")
+
+        def col(*names):
+            return next((idx[name] for name in names if name in idx), None)
+
+        order_col = col("Mã đơn hàng", "ID đơn hàng", "Order id", "Order ID", "Order Id")
+        product_col = col("Tên sản phẩm", "Item Name", "Product Name")
+        code_col = col("Mã sản phẩm", "ID SKU", "Item id", "Item ID", "Model id", "Model ID")
         if order_col is None or product_col is None:
             continue
 
