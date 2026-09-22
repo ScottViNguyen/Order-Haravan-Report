@@ -1,3 +1,4 @@
+import csv
 import json
 import re
 from html import unescape
@@ -362,10 +363,7 @@ def load_affiliate_order_keys(product_alias_index, product_model_index, priority
     if not AFFILIATE_DIR.exists():
         return keys
 
-    for file in sorted(AFFILIATE_DIR.glob("**/*.xlsx")):
-        wb = load_workbook(file, read_only=True, data_only=True)
-        ws = wb.active
-        headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    def add_rows(headers, rows):
         idx = {header: pos for pos, header in enumerate(headers) if header}
 
         def col(*names):
@@ -375,15 +373,27 @@ def load_affiliate_order_keys(product_alias_index, product_model_index, priority
         product_col = col("Tên sản phẩm", "Item Name", "Product Name")
         code_col = col("Mã sản phẩm", "ID SKU", "Item id", "Item ID", "Model id", "Model ID")
         if order_col is None or product_col is None:
-            continue
+            return
 
-        for row in ws.iter_rows(min_row=2, values_only=True):
+        for row in rows:
             order_id = clean_text(row[order_col] if order_col < len(row) else None, "")
             product = clean_text(row[product_col] if product_col < len(row) else None, "")
             code = row[code_col] if code_col is not None and code_col < len(row) else ""
             sku = resolve_sku_from_product(code, product, product_alias_index, product_model_index, priority_model_index)
             if order_id and sku:
                 keys.add((order_id, sku))
+
+    for file in sorted(AFFILIATE_DIR.glob("**/*.xlsx")):
+        wb = load_workbook(file, read_only=True, data_only=True)
+        ws = wb.active
+        headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        add_rows(headers, ws.iter_rows(min_row=2, values_only=True))
+
+    for file in sorted(AFFILIATE_DIR.glob("**/*.csv")):
+        with open(file, "r", encoding="utf-8-sig", newline="") as fh:
+            reader = csv.reader(fh)
+            headers = next(reader, [])
+            add_rows(headers, reader)
     return keys
 
 
