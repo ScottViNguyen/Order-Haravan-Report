@@ -2,7 +2,6 @@ import csv
 import json
 import re
 from html import unescape
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from urllib.error import URLError, HTTPError
@@ -29,7 +28,6 @@ LOCAL_IMAGE_DIR = BASE / "product_images"
 FETCH_PRODUCT_IMAGES = False
 DOWNLOAD_IMAGE_FILES = True
 SOURCE_TYPES = ("Product Cart", "Livestream", "Video", "Affiliate")
-VAT_DIVISOR = 1.08
 
 
 def as_number(value):
@@ -448,7 +446,6 @@ def load_priority_map():
 
 def read_records():
     raw = []
-    order_buckets = defaultdict(list)
     product_map, product_alias_index = load_product_map()
     priority_map = load_priority_map()
     image_link_map = load_image_link_map()
@@ -471,7 +468,6 @@ def read_records():
 
             qty = as_number(row[idx["Số lượng sản phẩm"]])
             price = as_number(row[idx["Giá sản phẩm"]])
-            gross_revenue = qty * price
             barcode = clean_text(row[idx["Mã sản phẩm"]], "Không có barcode")
             product = clean_text(row[idx["Tên sản phẩm"]], "Không có tên sản phẩm")
             model = extract_model(product)
@@ -497,11 +493,9 @@ def read_records():
                 "c": channel,
                 "x": cancel,
                 "q": round(qty, 4),
-                "r": 0,
+                "r": round(price, 2),
                 "qa": 0,
                 "ra": 0,
-                "_gross": gross_revenue,
-                "_order_total": as_number(row[idx["Tổng cộng"]]) / VAT_DIVISOR,
                 "s": sku,
                 "v": barcode,
                 "p": product,
@@ -517,30 +511,11 @@ def read_records():
                 "ful": clean_text(row[idx["Tình trạng giao hàng"]], "Không xác định"),
             }
             raw.append(item)
-            order_buckets[order_id].append(item)
-
-    for order_items in order_buckets.values():
-        order_total = order_items[0].get("_order_total", 0)
-        gross_total = sum(item.get("_gross", 0) for item in order_items)
-        if gross_total:
-            allocated = 0
-            for item in order_items[:-1]:
-                item["r"] = round(order_total * item.get("_gross", 0) / gross_total, 2)
-                allocated += item["r"]
-            order_items[-1]["r"] = round(order_total - allocated, 2)
-        elif order_items:
-            even_share = round(order_total / len(order_items), 2)
-            allocated = even_share * (len(order_items) - 1)
-            for item in order_items[:-1]:
-                item["r"] = even_share
-            order_items[-1]["r"] = round(order_total - allocated, 2)
 
     for item in raw:
         if (item.get("o"), item.get("s")) in affiliate_keys:
             item["qa"] = item.get("q", 0)
             item["ra"] = item.get("r", 0)
-        item.pop("_gross", None)
-        item.pop("_order_total", None)
     return raw
 
 
@@ -762,7 +737,7 @@ def html_template(report_json):
       <div class="panel-toolbar"><div class="subtle">Top SKU theo DT, có thể sắp xếp theo Barcode, sản phẩm, group, DT, volume, ASP.</div><button id="downloadSkuData" class="download-btn">Tải data</button></div>
       <h3>Top SKU theo DT</h3><div id="skuTable"></div>
       <section class="stacked-panels"><article class="panel"><h3>Top 20 Growth</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuGrowthTable"></div></article><article class="panel"><h3>Top 20 Reduce</h3><div class="panel-subtitle">SKU có DT quy đổi > 5 triệu / tuần</div><div id="skuReduceTable"></div></article></section>
-      <div class="note">Nguồn dữ liệu: các file Orders_T*.xlsx trong folder hiện tại, Product Haravan.xlsx để join link/ảnh sản phẩm, và SKU Priority.xlsx để phân loại Priority. DT = Tổng cộng sau giảm giá theo mã đơn duy nhất, đã trừ VAT 8%; với đơn có nhiều sản phẩm, DT được phân bổ về từng dòng theo tỷ trọng Giá sản phẩm x Số lượng để tránh nhân đôi mã đơn. Dấu chấm/dấu phẩy số dùng locale vi-VN.</div>
+      <div class="note">Nguồn dữ liệu: các file Orders_T*.xlsx trong folder hiện tại, Product Haravan.xlsx để join link/ảnh sản phẩm, và SKU Priority.xlsx để phân loại Priority. DT = tổng cột Giá sản phẩm của từng dòng sản phẩm, không loại trừ dòng trùng mã đơn hàng và không chia VAT. Dấu chấm/dấu phẩy số dùng locale vi-VN.</div>
     </section>
 
     <h2 class="section-title">6. Raw Data</h2>
@@ -972,10 +947,10 @@ def html_template(report_json):
       const cur = summarize(current), prev = summarize(previous), total = cur.revenue;
       const rows = [
         [`ORDER HARAVAN REPORT ${periodLabel(state.from, state.to)}`, "", "", "", "", "", "", "", "", ""],
-        [`Unit: million VND | DT đã trừ VAT 8% | Generated ${new Date(REPORT_DATA.meta.generatedAt).toLocaleString("vi-VN")}`],
+        [`Unit: million VND | DT = tổng cột Giá sản phẩm, chưa chia VAT | Generated ${new Date(REPORT_DATA.meta.generatedAt).toLocaleString("vi-VN")}`],
         [],
         ["Metric", "Previous", "Current", "Vs Prev", "% vs Prev"],
-        ["MTD NMV", asMillion(prev.revenue), asMillion(cur.revenue), asMillion(cur.revenue - prev.revenue), percentValue(pctDelta(cur.revenue, prev.revenue))],
+        ["MTD DT", asMillion(prev.revenue), asMillion(cur.revenue), asMillion(cur.revenue - prev.revenue), percentValue(pctDelta(cur.revenue, prev.revenue))],
         ["Volume", Math.round(prev.volume), Math.round(cur.volume), Math.round(cur.volume - prev.volume), percentValue(pctDelta(cur.volume, prev.volume))],
         ["ASP", asMillion(prev.asp), asMillion(cur.asp), asMillion(cur.asp - prev.asp), percentValue(pctDelta(cur.asp, prev.asp))],
         ["% Hủy", percentValue(prev.cancelRate), percentValue(cur.cancelRate), percentValue(cur.cancelRate - prev.cancelRate), percentValue(pctDelta(cur.cancelRate, prev.cancelRate))],
